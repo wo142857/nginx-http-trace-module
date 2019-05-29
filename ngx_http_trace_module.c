@@ -164,16 +164,77 @@ ngx_http_trace_log_error(ngx_log_t *log, u_char *buf, size_t len)
 }
 
 
+size_t
+ngx_strlen_l(u_char *p, size_t n)
+{
+    size_t  i;
+
+    for (i = 0; i < n; i++) {
+
+        if (p[i] == '\0') {
+            return i;
+        }
+    }
+
+    return n;
+}
+
+
 // First request without X-NTM-Traceid X-NTM-Currentid or X-NTM-Parentid
 // Need to gen these ids and set X-NTM headers in main request
 static ngx_int_t
 ngx_http_trace_first_request(ngx_http_request_t *r, ngx_http_trace_ctx_t *ctx)
 {
     ngx_table_elt_t                *h;
+    ngx_http_variable_value_t       v;
+    ngx_str_t                       header;
 
-    ngx_http_trace_genid(ctx->traceid);
-    ngx_http_trace_genid(ctx->cid);
-    ngx_sprintf(ctx->pid, "00000000000000000000000000000000");
+    // Get X-NTM-Debug
+    header.data = (u_char *) "http_x_ntm_debug";
+    header.len = sizeof("http_x_ntm_debug") - 1;
+    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
+                                     sizeof("http_") - 1);
+    if (!v.not_found && v.len == 1 && v.data[0] == '1') {
+        // Has header X-NTM-Debug: 1
+        ctx->debug = 1;
+    }
+
+    // Get X-NTM-Traceid
+    header.data = (u_char *) "http_x_ntm_traceid";
+    header.len = sizeof("http_x_ntm_traceid") - 1;
+    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
+                                     sizeof("http_") - 1);
+    if (v.not_found) {
+        ngx_http_trace_genid(ctx->traceid);
+    } else {
+        ngx_memcpy(ctx->traceid, v.data, ngx_min(v.len, sizeof(ctx->traceid)));
+        // ngx_snprintf(ctx->traceid, sizeof(ctx->traceid), "%s", v.data);
+    }
+
+    // Get X-NTM-Currentid
+    header.data = (u_char *) "http_x_ntm_currentid";
+    header.len = sizeof("http_x_ntm_currentid") - 1;
+    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
+                                     sizeof("http_") - 1);
+    if (v.not_found) {
+        ngx_http_trace_genid(ctx->cid);
+    } else {
+        ngx_memcpy(ctx->cid, v.data, ngx_min(v.len, sizeof(ctx->cid)));
+        // ngx_snprintf(ctx->cid, sizeof(ctx->cid), "%s", v.data);
+    }
+
+    // Get X-NTM-Parentid
+    header.data = (u_char *) "http_x_ntm_parentid";
+    header.len = sizeof("http_x_ntm_parentid") - 1;
+    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
+                                     sizeof("http_") - 1);
+    if (v.not_found) {
+        ngx_sprintf(ctx->pid, "00000000000000000000000000000000");
+    } else {
+        ngx_memcpy(ctx->pid, v.data, ngx_min(v.len, sizeof(ctx->pid)));
+        // ngx_snprintf(ctx->pid, sizeof(ctx->pid), "%s", v.data);
+    }
+
 
     // Set X-NTM-Traceid
     h = ngx_list_push(&r->headers_in.headers);
@@ -185,7 +246,7 @@ ngx_http_trace_first_request(ngx_http_request_t *r, ngx_http_trace_ctx_t *ctx)
     h->key.len = sizeof("X-NTM-Traceid") - 1;
 
     h->value.data = ctx->traceid;
-    h->value.len = sizeof(ctx->traceid);
+    h->value.len = ngx_strlen_l(ctx->traceid, sizeof(ctx->traceid));
 
     h->lowcase_key = ngx_pnalloc(r->pool, h->key.len);
     if (h->lowcase_key == NULL) {
@@ -203,7 +264,7 @@ ngx_http_trace_first_request(ngx_http_request_t *r, ngx_http_trace_ctx_t *ctx)
     h->key.len = sizeof("X-NTM-Currentid") - 1;
 
     h->value.data = ctx->cid;
-    h->value.len = sizeof(ctx->cid);
+    h->value.len = ngx_strlen_l(ctx->cid, sizeof(ctx->cid));
 
     h->lowcase_key = ngx_pnalloc(r->pool, h->key.len);
     if (h->lowcase_key == NULL) {
@@ -221,7 +282,7 @@ ngx_http_trace_first_request(ngx_http_request_t *r, ngx_http_trace_ctx_t *ctx)
     h->key.len = sizeof("X-NTM-Parentid") - 1;
 
     h->value.data = ctx->pid;
-    h->value.len = sizeof(ctx->pid);
+    h->value.len = ngx_strlen_l(ctx->pid, sizeof(ctx->pid));
 
     h->lowcase_key = ngx_pnalloc(r->pool, h->key.len);
     if (h->lowcase_key == NULL) {
@@ -238,8 +299,6 @@ ngx_http_trace_handler(ngx_http_request_t *r)
 {
     ngx_http_trace_main_conf_t     *tmcf;
     ngx_http_trace_ctx_t           *ctx;
-    ngx_http_variable_value_t       v;
-    ngx_str_t                       header;
 
     if (r != r->main) { // subrequest
         return NGX_DECLINED;
@@ -264,52 +323,6 @@ ngx_http_trace_handler(ngx_http_request_t *r)
     // traceid currentid parentid log into nginx error log
     r->connection->log->handler = ngx_http_trace_log_error;
 
-    // Get X-NTM-Debug
-    header.data = (u_char *) "http_x_ntm_debug";
-    header.len = sizeof("http_x_ntm_debug") - 1;
-    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
-                                     sizeof("http_") - 1);
-    if (!v.not_found && v.len == 1 && v.data[0] == '1') {
-        // Has header X-NTM-Debug: 1
-        ctx->debug = 1;
-    }
-
-    // Get X-NTM-Traceid
-    header.data = (u_char *) "http_x_ntm_traceid";
-    header.len = sizeof("http_x_ntm_traceid") - 1;
-    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
-                                     sizeof("http_") - 1);
-    if (v.not_found) {
-        goto notfound;
-    }
-
-    ngx_memcpy(ctx->traceid, v.data, ngx_min(v.len, sizeof(ctx->traceid)));
-
-    // Get X-NTM-Currentid
-    header.data = (u_char *) "http_x_ntm_currentid";
-    header.len = sizeof("http_x_ntm_currentid") - 1;
-    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
-                                     sizeof("http_") - 1);
-    if (v.not_found) {
-        goto notfound;
-    }
-
-    ngx_memcpy(ctx->cid, v.data, ngx_min(v.len, sizeof(ctx->cid)));
-
-    // Get X-NTM-Parentid
-    header.data = (u_char *) "http_x_ntm_parentid";
-    header.len = sizeof("http_x_ntm_parentid") - 1;
-    ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
-                                     sizeof("http_") - 1);
-    if (v.not_found) {
-        goto notfound;
-    }
-
-    ngx_memcpy(ctx->pid, v.data, ngx_min(v.len, sizeof(ctx->pid)));
-
-    return NGX_DECLINED;
-
-notfound:
 
     if (ngx_http_trace_first_request(r, ctx) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
