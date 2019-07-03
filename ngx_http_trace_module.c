@@ -2,7 +2,6 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
-
 typedef struct {
     ngx_flag_t                  trace;
 } ngx_http_trace_main_conf_t;
@@ -194,6 +193,7 @@ ngx_http_trace_first_request(ngx_http_request_t *r, ngx_http_trace_ctx_t *ctx)
     header.len = sizeof("http_x_ntm_debug") - 1;
     ngx_http_variable_unknown_header(&v, &header, &r->headers_in.headers.part,
                                      sizeof("http_") - 1);
+
     if (!v.not_found && v.len == 1 && v.data[0] == '1') {
         // Has header X-NTM-Debug: 1
         ctx->debug = 1;
@@ -322,6 +322,9 @@ ngx_http_trace_handler(ngx_http_request_t *r)
 
     // traceid currentid parentid log into nginx error log
     r->connection->log->handler = ngx_http_trace_log_error;
+    if (ctx->debug && ctx->debug == 1) {
+        r->connection->log->log_level = NGX_LOG_INFO;
+    }
 
 
     if (ngx_http_trace_first_request(r, ctx) != NGX_OK) {
@@ -395,6 +398,21 @@ ngx_http_trace_parentid_variable(ngx_http_request_t *r,
     v->not_found = 0;
 
     return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_http_debug_log_level(ngx_http_request_t *r)
+{
+    ngx_http_trace_ctx_t           *ctx;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_trace_module);
+
+    if (ctx && ctx->debug && ctx->debug == 1) {
+        r->connection->log->log_level = NGX_LOG_INFO;
+    }
+
+    return NGX_DECLINED;
 }
 
 
@@ -535,6 +553,13 @@ ngx_http_trace_init(ngx_conf_t *cf)
     }
 
     *h = ngx_http_trace_handler;
+
+    h = ngx_array_push(&cmcf->phases[NGX_HTTP_REWRITE_PHASE].handlers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    *h = ngx_http_debug_log_level;
 
     return NGX_OK;
 }
