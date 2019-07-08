@@ -9,4 +9,4 @@
     main_conf directive "http_trace" & no_args
 
 #### X-NTM-Debug
-    if the request headers contains "X-NTM_Debug: 1", the log level will be dynamically adjusted to the "NGX_LOG_DEBUG".
+    if the request headers contains "X-NTM-Debug: 1", the log level will be dynamically adjusted to the "NGX_LOG_DEBUG".
